@@ -10,7 +10,7 @@ if (-not (Test-Admin)) {
     $isIex = $MyInvocation.Line -like '*iex*'
     if (-not $scriptPath -or $isIex) {
         try {
-            $scriptContent = (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/ItzEmoji/Powershell_Configure_Script/main/configure.ps1" -UseBasicParsing).Content
+            $scriptContent = (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/ItzEmoji/Powershell_Configure_Script/master/configure.ps1" -UseBasicParsing).Content
             $tempScript = [System.IO.Path]::GetTempFileName() + ".ps1"
             Set-Content -Path $tempScript -Value $scriptContent -Force
             $scriptPath = $tempScript
@@ -31,7 +31,7 @@ if (-not (Test-Admin)) {
 
 # Main menu loop
 while ($true) {
-    Write-Host "Welcome to SuperTool"
+    Write-Host "Welcome ItzEmoji!"
     Write-Host "Options:"
     Write-Host "1: Run WinUtil"
     Write-Host "2: Install Package Manager"
