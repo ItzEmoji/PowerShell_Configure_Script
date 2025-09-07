@@ -46,17 +46,50 @@ function New-Pastebin {
         [Parameter(Mandatory=$true)] $Title,
         [Parameter(Mandatory=$true)] $ApiKey,
         $Password,
+        $UserKey = "",
         $ExpireDate = "1M"
     )
     try {
         $uri = "https://pastebin.com/api/api_post.php"
-        $body = "api_dev_key=$ApiKey&api_option=paste&api_paste_code=$([System.Web.HttpUtility]::UrlEncode($Content))&api_paste_name=$([System.Web.HttpUtility]::UrlEncode($Title))&api_paste_expire_date=$ExpireDate"
-        if ($Password) {
-            $body += "&api_paste_private=2&api_paste_password=$([System.Web.HttpUtility]::UrlEncode($Password))"
-        } else {
-            $body += "&api_paste_private=1"
+        # Check content size (Pastebin free account limit: ~500 KB)
+        $contentBytes = [System.Text.Encoding]::UTF8.GetBytes($Content)
+        if ($contentBytes.Length -gt 500000) {
+            Write-Host "Error: Paste content exceeds 500 KB limit for free Pastebin accounts."
+            return $null
         }
-        $response = Invoke-WebRequest -Uri $uri -Method Post -Body $body -ContentType "application/x-www-form-urlencoded" -ErrorAction Stop
+        # Build body as a hashtable
+        $bodyParams = @{
+            api_dev_key = $ApiKey
+            api_option = "paste"
+            api_paste_code = $Content
+            api_paste_name = $Title
+            api_paste_expire_date = $ExpireDate
+            api_paste_format = "json"
+        }
+        if ($Password) {
+            if (-not $UserKey) {
+                Write-Host "Warning: Private pastes (with password) require an api_user_key. Using unlisted (api_paste_private=1) instead."
+                $bodyParams.api_paste_private = "1"
+                $bodyParams.api_paste_password = $Password
+            } else {
+                $bodyParams.api_paste_private = "2"
+                $bodyParams.api_paste_password = $Password
+                $bodyParams.api_user_key = $UserKey
+            }
+        } else {
+            $bodyParams.api_paste_private = "1"
+        }
+        # Convert to URL-encoded string
+        $body = ($bodyParams.GetEnumerator() | ForEach-Object {
+            "$($_.Key)=$([System.Web.HttpUtility]::UrlEncode($_.Value))"
+        }) -join "&"
+        
+        # Save body for debugging
+        $debugFile = [System.IO.Path]::GetTempFileName() + ".txt"
+        $body | Out-File -FilePath $debugFile -Encoding UTF8
+        Write-Host "Debug: Request body saved to $debugFile"
+
+        $response = Invoke-WebRequest -Uri $uri -Method Post -Body $body -ContentType "application/x-www-form-urlencoded; charset=UTF-8" -ErrorAction Stop
         if ($response.StatusCode -eq 200 -and $response.Content -match "^https://pastebin.com/") {
             Write-Host "Pastebin created successfully: $($response.Content)"
             if ($Password) {
@@ -71,8 +104,16 @@ function New-Pastebin {
         Write-Host "Error creating Pastebin: $($_.Exception.Message)"
         if ($_.Exception.Response) {
             Write-Host "HTTP Status: $($_.Exception.Response.StatusCode)"
-            Write-Host "Response Content: $($_.Exception.Response.Content)"
+            try {
+                $stream = $_.Exception.Response.GetResponseStream()
+                $reader = New-Object System.IO.StreamReader($stream)
+                $responseContent = $reader.ReadToEnd()
+                Write-Host "Response Content: $responseContent"
+            } catch {
+                Write-Host "Unable to read response content."
+            }
         }
+        Write-Host "Check the request body in $debugFile for issues."
         return $null
     }
 }
@@ -255,12 +296,12 @@ function Invoke-SuperTool {
                                 continue
                             } elseif ($input -eq 'a') {
                                 foreach ($file in $links) {
-                                    $fullUrl = $baseUrl + ${file}
+                                    $fullUrl = $baseUrl + $file
                                     $tempPath = [System.IO.Path]::GetTempFileName() + ".reg"
                                     Invoke-WebRequest -Uri $fullUrl -OutFile $tempPath
                                     Start-Process reg.exe -ArgumentList "import `"$tempPath`"" -Wait -NoNewWindow
                                     Remove-Item $tempPath -Force
-                                    Write-Host "${file} applied successfully."
+                                    Write-Host "$file applied successfully."
                                 }
                             } else {
                                 try {
@@ -415,6 +456,7 @@ function Invoke-SuperTool {
                                         }
                                         $usePassword = Read-Host "Use a password for Pastebin? (y/n, default n)"
                                         $password = $null
+                                        $userKey = ""
                                         if ($usePassword -eq 'y' -or $usePassword -eq 'Y') {
                                             $passwordChoice = Read-Host "Enter a password or press Enter to generate a random one"
                                             if ($passwordChoice) {
@@ -422,15 +464,22 @@ function Invoke-SuperTool {
                                             } else {
                                                 $password = New-RandomPassword
                                             }
+                                            $usePrivate = Read-Host "Create as private paste? (y/n, default n; requires api_user_key)"
+                                            if ($usePrivate -eq 'y' -or $usePrivate -eq 'Y') {
+                                                $userKey = Read-Host "Enter Pastebin api_user_key (or q to cancel)"
+                                                if ($userKey -eq 'q') {
+                                                    continue
+                                                }
+                                            }
                                         }
-                                        $expire = Read-Host "Enter Pastebin expiration (N=Never, 10M=10 Minutes, 1H=1 Hour, 1D=1 Day, 1W=1 Week, 1M=1 Month, 6M=6 Months, 1Y=1 Year, default 1M)"
+                                        $expire = Read-Host "Enter Pastebin expiration (N=Never, 10M=10 Minutes, 1H=1 Hour, 1D=1 Day, 1W=1 Week, 2W=2 Weeks, 1M=1 Month, 6M=6 Months, 1Y=1 Year, default 1M)"
                                         if (-not $expire) { $expire = "1M" }
-                                        if ($expire -notin @("N", "10M", "1H", "1D", "1W", "1M", "6M", "1Y")) {
+                                        if ($expire -notin @("N", "10M", "1H", "1D", "1W", "2W", "1M", "6M", "1Y")) {
                                             Write-Host "Invalid expiration, using default 1M."
                                             $expire = "1M"
                                         }
                                         $content = $serviceData | ConvertTo-Json
-                                        $result = New-Pastebin -Content $content -Title $title -ApiKey $apiKey -Password $password -ExpireDate $expire
+                                        $result = New-Pastebin -Content $content -Title $title -ApiKey $apiKey -Password $password -UserKey $userKey -ExpireDate $expire
                                         if ($result) {
                                             Write-Host "Service states exported to Pastebin."
                                         }
@@ -633,7 +682,7 @@ function Invoke-SuperTool {
                         Expand-Archive -Path $tempZipPath -DestinationPath $extractPath -Force
                         Remove-Item $tempZipPath -Force
                         
-                        $exePath = Join-Path $extractPath "CrapFixer.exe"
+                        $exePath = Join-Path $extractPath "Crap Fixer.exe"
                         if (-not (Test-Path $exePath)) {
                             Write-Host "Error: CrapFixer.exe not found in extracted files."
                             continue
